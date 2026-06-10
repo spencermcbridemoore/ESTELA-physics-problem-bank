@@ -346,9 +346,27 @@ function indexRepoRefs(data) {
   }
 }
 
-(function initBrowserSource() {
-  if (S.bankSource.id !== 'directory') return;
+(function initSourceUi() {
+  const hideDl = () => {
+    const dlSec = document.querySelector('.sb-sec .sb-lbl[onclick="toggleDlPanel()"]');
+    if (dlSec) dlSec.closest('.sb-sec').style.display = 'none';
+  };
   const inp = document.getElementById('path-inp');
+
+  if (S.bankSource.id === 'bundle') {
+    inp.readOnly = true;
+    inp.value = S.bankSource.getDisplayPath();
+    document.getElementById('btn-choose-folder').style.display = 'none';
+    hideDl();
+    const hint = document.getElementById('empty-hint');
+    if (hint) {
+      hint.innerHTML = 'Bundled problem banks load automatically. Browse, add to cart, and preview exams — no folder picker needed.';
+    }
+    loadRepo().catch(e => toast('Error: ' + e));
+    return;
+  }
+
+  if (S.bankSource.id !== 'directory') return;
   inp.placeholder = 'Select a folder with Choose folder';
   inp.readOnly = true;
   document.getElementById('btn-choose-folder').style.display = 'inline-flex';
@@ -356,8 +374,7 @@ function indexRepoRefs(data) {
   if (hint) {
     hint.innerHTML = 'Click <b>Choose folder</b> and select your local ESTELA problem-bank clone (repo root or <code>PHY I Mechanics</code>).';
   }
-  const dlSec = document.querySelector('.sb-sec .sb-lbl[onclick="toggleDlPanel()"]');
-  if (dlSec) dlSec.closest('.sb-sec').style.display = 'none';
+  hideDl();
 })();
 
 // ── Theme ──────────────────────────────────────────────────────────────────
@@ -406,7 +423,10 @@ async function chooseFolder() {
 async function loadRepo() {
   try {
     let rootRef;
-    if (S.bankSource.id === 'directory') {
+    if (S.bankSource.id === 'bundle') {
+      await S.bankSource.ensureReady();
+      document.getElementById('path-inp').value = S.bankSource.getDisplayPath();
+    } else if (S.bankSource.id === 'directory') {
       rootRef = await S.bankSource.ensureRoot();
       document.getElementById('path-inp').value = S.bankSource.getDisplayPath();
     } else {

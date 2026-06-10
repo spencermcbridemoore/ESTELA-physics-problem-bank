@@ -36,6 +36,9 @@ htmlcov/
 # Jupyter
 .ipynb_checkpoints/
 
+# Generated standalone exam builder (run scripts/build_standalone_html.py)
+frontend/standalone.html
+
 # OS
 .DS_Store
 Thumbs.db

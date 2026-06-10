@@ -153,6 +153,71 @@
     return result;
   }
 
+  async function buildQuestionsFromData(data, bankRef, resolveFigureFn) {
+    const qs = data.questions || [];
+    const questions = [];
+    for (const q of qs) {
+      const qtype = getQtype(q);
+      const qdata = q[qtype] || {};
+      const body = latexToHtml(qdata.text || '');
+
+      const answers = [];
+      if (qtype === 'multiple_choice' || qtype === 'multiple_answers') {
+        const ansVal = qdata.answers || [];
+        for (const [j, atxt, correct] of extractMcAnswers(ansVal)) {
+          answers.push({
+            label: String.fromCharCode(65 + j),
+            text: latexToHtml(atxt),
+            correct,
+          });
+        }
+      } else if (qtype === 'numerical') {
+        const ans = qdata.answer || {};
+        let val = ans.value;
+        if (val != null && typeof val !== 'string') val = String(val);
+        val = val || '';
+        const tol = ans.tolerance || '';
+        const mt = ans.margin_type || '';
+        const ts = tol ? ` ± ${tol}${mt === 'percent' ? '%' : ''}` : '';
+        if (val && val !== 'null') {
+          answers.push({ label: 'Answer', text: `${val}${ts}`, correct: true });
+        }
+      } else if (qtype === 'true_false') {
+        const av = !!qdata.answer;
+        answers.push({ label: 'Answer', text: av ? 'True' : 'False', correct: true });
+      }
+
+      const fb = qdata.feedback || {};
+      const solution = latexToHtml(fb.general || '');
+      const fig_url = await resolveFigureFn(bankRef, qdata, bankRef);
+
+      questions.push({
+        id: qdata.id || `q${questions.length + 1}`,
+        title: qdata.title || '',
+        type: qtype,
+        type_label: typeLabel(qtype),
+        body,
+        answers,
+        solution,
+        fig_url,
+      });
+    }
+    return questions;
+  }
+
+  function bytesToDataUrl(bytes, filename) {
+    let binary = '';
+    for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+    const b64 = btoa(binary);
+    const name = (filename || '').toLowerCase();
+    let mime = 'image/png';
+    if (name.endsWith('.jpg') || name.endsWith('.jpeg')) mime = 'image/jpeg';
+    else if (name.endsWith('.gif')) mime = 'image/gif';
+    else if (name.endsWith('.svg')) mime = 'image/svg+xml';
+    else if (name.endsWith('.webp')) mime = 'image/webp';
+    return `data:${mime};base64,${b64}`;
+  }
+
   async function fileToDataUrl(file) {
     const buf = await file.arrayBuffer();
     const bytes = new Uint8Array(buf);
@@ -385,57 +450,7 @@
     }
 
     async _buildQuestions(data, bankRef) {
-      const qs = data.questions || [];
-      const questions = [];
-      for (const q of qs) {
-        const qtype = getQtype(q);
-        const qdata = q[qtype] || {};
-        const body = latexToHtml(qdata.text || '');
-
-        const answers = [];
-        if (qtype === 'multiple_choice' || qtype === 'multiple_answers') {
-          const ansVal = qdata.answers || [];
-          for (const [j, atxt, correct] of extractMcAnswers(ansVal)) {
-            answers.push({
-              label: String.fromCharCode(65 + j),
-              text: latexToHtml(atxt),
-              correct,
-            });
-          }
-        } else if (qtype === 'numerical') {
-          const ans = qdata.answer || {};
-          let val = ans.value;
-          if (val != null && typeof val !== 'string') val = String(val);
-          val = val || '';
-          const tol = ans.tolerance || '';
-          const mt = ans.margin_type || '';
-          const ts = tol
-            ? ` ± ${tol}${mt === 'percent' ? '%' : ''}`
-            : '';
-          if (val && val !== 'null') {
-            answers.push({ label: 'Answer', text: `${val}${ts}`, correct: true });
-          }
-        } else if (qtype === 'true_false') {
-          const av = !!qdata.answer;
-          answers.push({ label: 'Answer', text: av ? 'True' : 'False', correct: true });
-        }
-
-        const fb = qdata.feedback || {};
-        const solution = latexToHtml(fb.general || '');
-        const fig_url = await this.resolveFigure(bankRef, qdata, bankRef);
-
-        questions.push({
-          id: qdata.id || `q${questions.length + 1}`,
-          title: qdata.title || '',
-          type: qtype,
-          type_label: typeLabel(qtype),
-          body,
-          answers,
-          solution,
-          fig_url,
-        });
-      }
-      return questions;
+      return buildQuestionsFromData(data, bankRef, (r, qd, br) => this.resolveFigure(r, qd, br));
     }
 
     async resolveFigure(_ref, qdata, bankRef) {
@@ -502,12 +517,232 @@
     }
   }
 
-  // ── Future sources (stubs) ────────────────────────────────────────────────
+  // ── ZipSource / BundleSource (in-memory archive) ─────────────────────────
+
+  function detectZipPrefix(paths) {
+    if (!paths.length) return '';
+    const roots = new Set(paths.map((p) => p.split('/')[0]).filter(Boolean));
+    if (roots.size !== 1) return '';
+    const root = [...roots][0];
+    if (SKIP_COURSES.includes(root)) return '';
+    if (root.toLowerCase().includes('estela') || root.endsWith('-main') || root.endsWith('-master')) {
+      return `${root}/`;
+    }
+    return '';
+  }
+
+  class ZipSource {
+    constructor() {
+      this.id = 'zip';
+      this.label = 'Zip archive';
+      this._zip = null;
+      this._prefix = '';
+      this._ready = false;
+      this._displayName = 'Zip archive';
+    }
+
+    getDisplayPath() {
+      return this._displayName;
+    }
+
+    async loadFromArrayBuffer(buf) {
+      if (!global.JSZip) throw new Error('JSZip not loaded');
+      this._zip = await global.JSZip.loadAsync(buf);
+      const paths = [];
+      this._zip.forEach((rel, entry) => {
+        if (!entry.dir) paths.push(rel.replace(/\\/g, '/'));
+      });
+      this._prefix = detectZipPrefix(paths);
+      this._ready = true;
+    }
+
+    async ensureReady() {
+      if (!this._ready) throw new Error('Zip not loaded');
+    }
+
+    _zipPath(logicalPath) {
+      const p = logicalPath.replace(/\\/g, '/');
+      return this._prefix ? this._prefix + p : p;
+    }
+
+    _logicalPath(zipRel) {
+      const p = zipRel.replace(/\\/g, '/');
+      if (this._prefix && p.startsWith(this._prefix)) return p.slice(this._prefix.length);
+      return p;
+    }
+
+    async _readText(logicalPath) {
+      const entry = this._zip.file(this._zipPath(logicalPath));
+      if (!entry) return null;
+      return entry.async('text');
+    }
+
+    async _readBytes(logicalPath) {
+      const entry = this._zip.file(this._zipPath(logicalPath));
+      if (!entry) return null;
+      return entry.async('uint8array');
+    }
+
+    _listLogicalPaths() {
+      const paths = [];
+      this._zip.forEach((rel, entry) => {
+        if (!entry.dir) paths.push(this._logicalPath(rel.replace(/\\/g, '/')));
+      });
+      return paths;
+    }
+
+    async scan() {
+      await this.ensureReady();
+      const paths = this._listLogicalPaths();
+      const result = {};
+      const courseNames = new Set();
+      for (const p of paths) {
+        const course = p.split('/')[0];
+        if (course) courseNames.add(course);
+      }
+
+      for (const courseName of [...courseNames].sort()) {
+        if (SKIP_COURSES.includes(courseName) || courseName.startsWith('.')) continue;
+        const courseTopics = {};
+        const topicNames = new Set();
+        for (const p of paths) {
+          if (!p.startsWith(`${courseName}/`)) continue;
+          const topic = p.split('/')[1];
+          if (topic) topicNames.add(topic);
+        }
+
+        for (const topicName of [...topicNames].sort()) {
+          if (topicName.startsWith('.')) continue;
+          const banks = await this._collectBanks(courseName, topicName, paths);
+          if (banks.length) courseTopics[topicName] = banks;
+        }
+
+        if (Object.keys(courseTopics).length) result[courseName] = courseTopics;
+      }
+
+      return { data: result };
+    }
+
+    async _collectBanks(courseName, topicName, paths) {
+      const prefix = `${courseName}/${topicName}/`;
+      const banks = [];
+      for (const p of paths) {
+        if (!p.startsWith(prefix)) continue;
+        const ext = p.split('.').pop()?.toLowerCase();
+        if (ext !== 'yaml' && ext !== 'yml') continue;
+        const relFromTopic = p.slice(prefix.length).split('/');
+        if (relFromTopic.some((part) => SKIP_DIRS.includes(part))) continue;
+
+        let content;
+        try {
+          content = await this._readText(p);
+        } catch (_e) {
+          continue;
+        }
+        if (!content) continue;
+
+        let data;
+        try {
+          data = parseYaml(content);
+        } catch (_e) {
+          continue;
+        }
+        if (!isBank(data)) continue;
+
+        const status = data.bank_info?.status || '';
+        if (status === 'draft' || status === 'deprecated') continue;
+
+        const bankDirZipPath = p.substring(0, p.lastIndexOf('/') + 1);
+        const bankRef = this._makeRef(p, bankMeta(data), { zipPath: p, bankDirZipPath });
+        banks.push({ path: p, meta: bankRef.meta, bankRef });
+      }
+      banks.sort((a, b) => a.path.localeCompare(b.path));
+      return banks;
+    }
+
+    async loadBank(ref) {
+      const bankRef = ref?.handle?.zipPath ? ref : null;
+      if (!bankRef?.handle?.zipPath) throw new Error('Invalid bank reference for zip source');
+      await this.ensureReady();
+      const content = await this._readText(bankRef.handle.zipPath);
+      if (!content) throw new Error('Failed to read bank from zip');
+      const data = parseYaml(content);
+      if (!isBank(data)) throw new Error('Invalid bank');
+      const meta = bankMeta(data);
+      const questions = await buildQuestionsFromData(
+        data, bankRef, (r, qd, br) => this.resolveFigure(r, qd, br)
+      );
+      return { meta, rawData: data, questions, bankRef };
+    }
+
+    async resolveFigure(_ref, qdata, bankRef) {
+      const fig = qdata?.figure;
+      const bankDir = bankRef?.handle?.bankDirZipPath;
+      if (!fig || !bankDir) return null;
+      const basename = fig.replace(/\\/g, '/').split('/').pop();
+      const candidates = [
+        `${bankDir}${fig.replace(/\\/g, '/')}`,
+        `${bankDir}Figures/${basename}`,
+        `${bankDir}Figure/${basename}`,
+        `${bankDir}figures/${basename}`,
+        `${bankDir}figure/${basename}`,
+        `${bankDir}Images/${basename}`,
+        `${bankDir}images/${basename}`,
+      ];
+      for (const path of candidates) {
+        try {
+          const bytes = await this._readBytes(path);
+          if (bytes) return bytesToDataUrl(bytes, basename);
+        } catch (_e) { /* next */ }
+      }
+      return null;
+    }
+
+    _makeRef(path, meta, handleExtra) {
+      return {
+        id: path,
+        path,
+        meta,
+        sourceKind: 'zip',
+        handle: handleExtra,
+      };
+    }
+
+    findBankRef(repoData, path) {
+      for (const topics of Object.values(repoData || {})) {
+        for (const banks of Object.values(topics)) {
+          for (const b of banks) {
+            if (b.path === path) return b.bankRef;
+          }
+        }
+      }
+      return null;
+    }
+  }
+
+  class BundleSource extends ZipSource {
+    constructor() {
+      super();
+      this.id = 'bundle';
+      this.label = global.__ESTELA_BUNDLE__?.label || 'Bundled banks';
+      this._displayName = this.label;
+    }
+
+    async ensureReady() {
+      if (this._ready) return;
+      const bundle = global.__ESTELA_BUNDLE__;
+      if (!bundle?.zipBase64) throw new Error('No embedded bundle');
+      const binary = atob(bundle.zipBase64);
+      const bytes = new Uint8Array(binary.length);
+      for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+      await this.loadFromArrayBuffer(bytes.buffer);
+    }
+  }
 
   // class GitHubSource { ... } — fetch banks from GitHub API / raw URLs
-  // class ZipSource { ... } — load banks from uploaded .zip archive
 
   function autoSelectSource() {
+    if (global.__ESTELA_BUNDLE__) return new BundleSource();
     if (global.__TAURI__) return new TauriSource();
     return new DirectorySource();
   }
@@ -525,6 +760,8 @@
     extractMcAnswers,
     TauriSource,
     DirectorySource,
+    ZipSource,
+    BundleSource,
     autoSelectSource,
   };
 })(typeof window !== 'undefined' ? window : globalThis);
