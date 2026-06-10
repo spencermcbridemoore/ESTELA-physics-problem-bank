@@ -236,6 +236,7 @@ body:not(.tauri) #shell{height:100vh;}
                onkeydown="if(event.key==='Enter')loadRepo()">
         <div class="inp-row">
           <button class="btn btn-p" style="flex:1" onclick="loadRepo()">Load</button>
+          <button class="btn" id="btn-choose-folder" style="display:none;flex:1" onclick="chooseFolder()">Choose folder</button>
           <button class="btn btn-icon" onclick="clearAll()" title="Clear">✕</button>
         </div>
       </div>
@@ -295,7 +296,7 @@ body:not(.tauri) #shell{height:100vh;}
       <div id="empty">
         <div class="e-icon">⚛</div>
         <div class="e-h">Load a repository</div>
-        <p class="e-p">Enter the path to your local clone of the ESTELA problem bank and click <b>Load</b>.</p>
+        <p class="e-p" id="empty-hint">Enter the path to your local clone of the ESTELA problem bank and click <b>Load</b>.</p>
         <div class="e-code">github.com/Zhongzhou/ESTELA-physics-problem-bank</div>
       </div>
       <div id="banks-view" style="display:none"></div>
@@ -304,6 +305,10 @@ body:not(.tauri) #shell{height:100vh;}
 
 </div>
 <div id="toast"></div>
+
+<script src="https://cdn.jsdelivr.net/npm/js-yaml@4.1.0/dist/js-yaml.min.js"></script>
+<script src="bank-source.js"></script>
+<script src="exam-export.js"></script>
 
 <script>
 // ── Tauri window controls ───────────────────────────────────────────────────
@@ -320,13 +325,40 @@ async function wc(action) {
 
 // ── State ──────────────────────────────────────────────────────────────────
 const S = {
-  repo: {},        // course → topic → [{path,meta}]
-  cart: [],        // [{path,meta,topic,rawData}]
+  repo: {},        // course → topic → [{path,meta,bankRef?}]
+  cart: [],        // [{path,meta,topic,rawData,qn,bankRef?}]
+  bankRefs: new Map(), // path → BankRef
+  bankSource: EstelaBankSource.autoSelectSource(),
   expanded: new Set(),
   theme: localStorage.getItem('theme') || 'light',
   search: '',
   typeFilter: new Set(), // empty = show all types
 };
+
+function indexRepoRefs(data) {
+  S.bankRefs = new Map();
+  for (const topics of Object.values(data || {})) {
+    for (const banks of Object.values(topics)) {
+      for (const b of banks) {
+        if (b.bankRef) S.bankRefs.set(b.path, b.bankRef);
+      }
+    }
+  }
+}
+
+(function initBrowserSource() {
+  if (S.bankSource.id !== 'directory') return;
+  const inp = document.getElementById('path-inp');
+  inp.placeholder = 'Select a folder with Choose folder';
+  inp.readOnly = true;
+  document.getElementById('btn-choose-folder').style.display = 'inline-flex';
+  const hint = document.getElementById('empty-hint');
+  if (hint) {
+    hint.innerHTML = 'Click <b>Choose folder</b> and select your local ESTELA problem-bank clone (repo root or <code>PHY I Mechanics</code>).';
+  }
+  const dlSec = document.querySelector('.sb-sec .sb-lbl[onclick="toggleDlPanel()"]');
+  if (dlSec) dlSec.closest('.sb-sec').style.display = 'none';
+})();
 
 // ── Theme ──────────────────────────────────────────────────────────────────
 function applyTheme(t) {
@@ -363,16 +395,32 @@ function renderMath(el) {
 }
 
 // ── Load repo ──────────────────────────────────────────────────────────────
-async function loadRepo() {
-  const path = document.getElementById('path-inp').value.trim();
-  if (!path) return;
+async function chooseFolder() {
   try {
-    const result = await window.__TAURI__.core.invoke('scan_repo', {path});
+    await S.bankSource.ensureRoot();
+    document.getElementById('path-inp').value = S.bankSource.getDisplayPath();
+    await loadRepo();
+  } catch (e) { toast('Error: ' + e); }
+}
+
+async function loadRepo() {
+  try {
+    let rootRef;
+    if (S.bankSource.id === 'directory') {
+      rootRef = await S.bankSource.ensureRoot();
+      document.getElementById('path-inp').value = S.bankSource.getDisplayPath();
+    } else {
+      rootRef = document.getElementById('path-inp').value.trim();
+      if (!rootRef) return;
+    }
+    const result = await S.bankSource.scan(rootRef);
     const data = result.data;
     S.repo = data; S.cart = []; S.expanded = new Set(); S.search = '';
+    indexRepoRefs(data);
     document.getElementById('search-inp').value = '';
     populateFilters(); renderBanks(); renderCart();
     await restoreCart(data);
+    saveCart();
     toast('Loaded');
   } catch(e) { toast('Error: ' + e); }
 }
@@ -548,11 +596,12 @@ async function loadQs(path) {
   const container = document.getElementById(`ql-${slugify(path)}`);
   if (!container) return;
   try {
-    const result = await window.__TAURI__.core.invoke('bank_data', {path});
+    const bankRef = S.bankRefs.get(path);
+    const result = await S.bankSource.loadBank(bankRef || path);
     const {questions, rawData} = result;
-    // store rawData for export if this bank is in cart
+    if (result.bankRef) S.bankRefs.set(path, result.bankRef);
     const ci = S.cart.find(c=>c.path===path);
-    if (ci) ci.rawData = rawData;
+    if (ci) { ci.rawData = rawData; if (result.bankRef) ci.bankRef = result.bankRef; }
     container.innerHTML = questions.map((q,i)=>qHTML(q,i,path)).join('');
     renderMath(container);
   } catch(e) {
@@ -610,11 +659,13 @@ async function toggleCart(path, topic) {
       for (const b of bl)
         if (b.path===path) { meta = b.meta; break; }
 
-  // fetch rawData for LaTeX export
   try {
-    const result = await window.__TAURI__.core.invoke('bank_data', {path});
-    const {rawData, meta: apiMeta} = result;
-    S.cart.push({path, meta: meta||apiMeta, topic, rawData: rawData||{}, qn: 1});
+    const bankRef = S.bankRefs.get(path);
+    const result = await S.bankSource.loadBank(bankRef || path);
+    const {rawData, meta: apiMeta, bankRef: loadedRef} = result;
+    const ref = loadedRef || bankRef;
+    if (ref) S.bankRefs.set(path, ref);
+    S.cart.push({path, meta: meta||apiMeta, topic, rawData: rawData||{}, qn: 1, bankRef: ref});
     toast('Added to cart'); saveCart(); renderCart(); renderBanks();
   } catch(e) { toast('Error: ' + e); }
 }
@@ -742,6 +793,16 @@ function _cartBody() {
   return S.cart.map(c=>({path:c.path, meta:c.meta, rawData:c.rawData||{}, qn:c.qn||1}));
 }
 
+function _cartBodyWithRefs() {
+  return S.cart.map(c => ({
+    path: c.path,
+    meta: c.meta,
+    rawData: c.rawData || {},
+    qn: c.qn || 1,
+    bankRef: c.bankRef || S.bankRefs.get(c.path),
+  }));
+}
+
 async function pickSaveFolder() {
   if (!window.__TAURI__) return null;
   try {
@@ -815,11 +876,17 @@ async function doPreview(version, includeAnswers) {
   toast('Building preview…');
   const title = document.getElementById('exam-title').value || 'Exam';
   try {
-    const html = await window.__TAURI__.core.invoke('export_html', {
-      cart: _cartBody(), version, title, includeAnswers
-    });
-    await window.__TAURI__.core.invoke('open_preview', {html});
-    toast('Opened in browser');
+    const html = await EstelaExamExport.buildExamHtml(
+      _cartBodyWithRefs(), version, title, includeAnswers, S.bankSource
+    );
+    if (window.__TAURI__) {
+      await window.__TAURI__.core.invoke('open_preview', { html });
+    } else {
+      const url = URL.createObjectURL(new Blob([html], { type: 'text/html;charset=utf-8' }));
+      window.open(url, '_blank');
+      setTimeout(() => URL.revokeObjectURL(url), 120000);
+    }
+    toast('Opened preview');
   } catch(e) { toast('Error: ' + e); }
 }
 
@@ -855,9 +922,12 @@ async function restoreCart(repoData) {
     // fetch rawData for each restored item
     for (const item of valid) {
       try {
-        const result = await window.__TAURI__.core.invoke('bank_data', {path: item.path});
-        const {rawData} = result;
-        S.cart.push({...item, rawData: rawData||{}});
+        const bankRef = S.bankRefs.get(item.path);
+        const result = await S.bankSource.loadBank(bankRef || item.path);
+        const {rawData, bankRef: loadedRef} = result;
+        const ref = loadedRef || bankRef;
+        if (ref) S.bankRefs.set(item.path, ref);
+        S.cart.push({...item, rawData: rawData||{}, bankRef: ref});
       } catch(e) {}
     }
     if (S.cart.length) { renderCart(); renderBanks(); toast(`Restored ${S.cart.length} cart item${S.cart.length>1?'s':''}`); }
@@ -935,7 +1005,7 @@ async function updateLocalBanks() {
 }
 
 // ── Utilities ──────────────────────────────────────────────────────────────
-function versionLabel(v) { return String.fromCharCode(64 + v); }
+function versionLabel(v) { return EstelaExamExport.versionLabel(v); }
 function esc(s) {
   return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
