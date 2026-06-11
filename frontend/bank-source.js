@@ -153,6 +153,59 @@
     return result;
   }
 
+  function buildCategorizationGroups(qdata) {
+    const groups = [];
+    const cats = Array.isArray(qdata?.categories) ? qdata.categories : [];
+    for (const entry of cats) {
+      let cat = entry;
+      if (cat && typeof cat === 'object' && !Array.isArray(cat)
+          && cat.category && typeof cat.category === 'object') {
+        cat = cat.category;
+      }
+      if (!cat || typeof cat !== 'object' || Array.isArray(cat)) continue;
+      const items = (Array.isArray(cat.answers) ? cat.answers : [])
+        .map((a) => latexToHtml(String(a ?? '')));
+      groups.push({
+        title: latexToHtml(String(cat.description ?? 'Category')),
+        items,
+        correct: true,
+      });
+    }
+    const distractors = (Array.isArray(qdata?.distractors) ? qdata.distractors : [])
+      .map((a) => latexToHtml(String(a ?? '')));
+    if (distractors.length) {
+      groups.push({ title: 'Distractors (belong to no category)', items: distractors, correct: false });
+    }
+    return groups;
+  }
+
+  // ── Canvas QTI package helpers ────────────────────────────────────────────
+
+  function qtiZipPreference(filename, bankId) {
+    const n = String(filename || '').toLowerCase();
+    const id = String(bankId || '').toLowerCase();
+    if (id && n === `${id}.zip`) return 0;
+    if (n.includes('qti')) return 1;
+    if (n === 'import.zip') return 2;
+    return 3;
+  }
+
+  async function verifyQtiZipBytes(bytes) {
+    if (!global.JSZip) return true; // cannot verify without JSZip — assume ok
+    try {
+      const z = await global.JSZip.loadAsync(bytes);
+      return !!z.file('imsmanifest.xml');
+    } catch (_e) {
+      return false;
+    }
+  }
+
+  function qtiDownloadName(bankId, originalName) {
+    if (bankId) return `${bankId}-canvas-qti.zip`;
+    const base = String(originalName || 'qti').replace(/\.zip$/i, '');
+    return `${base}-canvas-qti.zip`;
+  }
+
   async function buildQuestionsFromData(data, bankRef, resolveFigureFn) {
     const qs = data.questions || [];
     const questions = [];
@@ -187,6 +240,8 @@
         answers.push({ label: 'Answer', text: av ? 'True' : 'False', correct: true });
       }
 
+      const groups = qtype === 'categorization' ? buildCategorizationGroups(qdata) : null;
+
       const fb = qdata.feedback || {};
       const solution = latexToHtml(fb.general || '');
       const fig_url = await resolveFigureFn(bankRef, qdata, bankRef);
@@ -198,6 +253,7 @@
         type_label: typeLabel(qtype),
         body,
         answers,
+        groups,
         solution,
         fig_url,
       });
@@ -267,12 +323,54 @@
     async loadBank(ref) {
       const path = typeof ref === 'string' ? ref : (ref.path || ref.handle?.path);
       const result = await global.__TAURI__.core.invoke('bank_data', { path });
+      const questions = result.questions || [];
+      const rawQs = Array.isArray(result.rawData?.questions) ? result.rawData.questions : [];
+      questions.forEach((q, i) => {
+        if (q && q.type === 'categorization') {
+          q.groups = buildCategorizationGroups(rawQs[i]?.categorization || {});
+        }
+      });
       return {
         meta: result.meta,
         rawData: result.rawData,
-        questions: result.questions,
+        questions,
         bankRef: this._makeRef(path, result.meta),
       };
+    }
+
+    /** Raw YAML text of the bank file (best effort). */
+    async loadBankText(ref) {
+      const path = typeof ref === 'string' ? ref : (ref?.path || ref?.handle?.path);
+      if (!path || !global.__TAURI__?.core?.convertFileSrc) return null;
+      try {
+        const url = global.__TAURI__.core.convertFileSrc(path);
+        const resp = await fetch(url);
+        if (resp.ok) return await resp.text();
+      } catch (_e) { /* fall through */ }
+      return null;
+    }
+
+    /** Canvas QTI package sitting next to the bank file, if any. */
+    async getQtiPackage(ref) {
+      const path = typeof ref === 'string' ? ref : (ref?.path || ref?.handle?.path);
+      if (!path || !global.__TAURI__?.core?.convertFileSrc) return null;
+      const bankDir = path.replace(/[/\\][^/\\]+$/, '');
+      const bankId = ref?.meta?.bank_id || '';
+      const names = [];
+      if (bankId) names.push(`${bankId}.zip`);
+      names.push('qti_import.zip', 'import.zip', 'qti.zip');
+      for (const name of names) {
+        try {
+          const url = global.__TAURI__.core.convertFileSrc(`${bankDir}/${name}`);
+          const resp = await fetch(url);
+          if (!resp.ok) continue;
+          const bytes = new Uint8Array(await resp.arrayBuffer());
+          if (await verifyQtiZipBytes(bytes)) {
+            return { bytes, filename: qtiDownloadName(bankId, name) };
+          }
+        } catch (_e) { /* try next */ }
+      }
+      return null;
     }
 
     async resolveFigure(_ref, qdata, bankRef) {
@@ -427,6 +525,9 @@
           bankDirHandle: dirHandle,
           rootHandle,
         });
+        const zipFiles = files.filter((f) => f.name.toLowerCase().endsWith('.zip'));
+        bankRef.handle.qtiZipFiles = zipFiles;
+        bankRef.meta.has_qti = zipFiles.length > 0;
         banks.push({ path: displayPath, meta: bankRef.meta, bankRef });
       }
 
@@ -447,6 +548,41 @@
       const meta = bankMeta(data);
       const questions = await this._buildQuestions(data, bankRef);
       return { meta, rawData: data, questions, bankRef };
+    }
+
+    /** Raw YAML text of the bank file. */
+    async loadBankText(ref) {
+      const fh = ref?.handle?.fileHandle;
+      if (!fh) return null;
+      const file = await fh.getFile();
+      return file.text();
+    }
+
+    /** Canvas QTI package sitting next to the bank file, if any. */
+    async getQtiPackage(ref) {
+      const bankId = ref?.meta?.bank_id || '';
+      let candidates = ref?.handle?.qtiZipFiles || [];
+      if (!candidates.length && ref?.handle?.bankDirHandle) {
+        candidates = [];
+        for await (const [name, handle] of ref.handle.bankDirHandle) {
+          if (handle.kind === 'file' && name.toLowerCase().endsWith('.zip')) {
+            candidates.push({ name, handle });
+          }
+        }
+      }
+      const sorted = [...candidates].sort(
+        (a, b) => qtiZipPreference(a.name, bankId) - qtiZipPreference(b.name, bankId)
+      );
+      for (const f of sorted) {
+        try {
+          const file = await f.handle.getFile();
+          const bytes = new Uint8Array(await file.arrayBuffer());
+          if (await verifyQtiZipBytes(bytes)) {
+            return { bytes, filename: qtiDownloadName(bankId, f.name) };
+          }
+        } catch (_e) { /* next */ }
+      }
+      return null;
     }
 
     async _buildQuestions(data, bankRef) {
@@ -654,6 +790,11 @@
 
         const bankDirZipPath = p.substring(0, p.lastIndexOf('/') + 1);
         const bankRef = this._makeRef(p, bankMeta(data), { zipPath: p, bankDirZipPath });
+        bankRef.meta.has_qti = paths.some(
+          (z) => z.startsWith(bankDirZipPath)
+            && z.toLowerCase().endsWith('.zip')
+            && !z.slice(bankDirZipPath.length).includes('/')
+        );
         banks.push({ path: p, meta: bankRef.meta, bankRef });
       }
       banks.sort((a, b) => a.path.localeCompare(b.path));
@@ -673,6 +814,38 @@
         data, bankRef, (r, qd, br) => this.resolveFigure(r, qd, br)
       );
       return { meta, rawData: data, questions, bankRef };
+    }
+
+    /** Raw YAML text of the bank file. */
+    async loadBankText(ref) {
+      const zipPath = ref?.handle?.zipPath;
+      if (!zipPath) return null;
+      await this.ensureReady();
+      return this._readText(zipPath);
+    }
+
+    /** Canvas QTI package sitting next to the bank file, if any. */
+    async getQtiPackage(ref) {
+      const bankRef = ref?.handle?.zipPath ? ref : null;
+      if (!bankRef) return null;
+      await this.ensureReady();
+      const bankDir = bankRef.handle.bankDirZipPath || '';
+      const bankId = bankRef.meta?.bank_id || '';
+      const candidates = this._listLogicalPaths()
+        .filter((p) => p.startsWith(bankDir)
+          && p.toLowerCase().endsWith('.zip')
+          && !p.slice(bankDir.length).includes('/'))
+        .sort((a, b) => qtiZipPreference(a.split('/').pop(), bankId)
+          - qtiZipPreference(b.split('/').pop(), bankId));
+      for (const p of candidates) {
+        try {
+          const bytes = await this._readBytes(p);
+          if (bytes && await verifyQtiZipBytes(bytes)) {
+            return { bytes, filename: qtiDownloadName(bankId, p.split('/').pop()) };
+          }
+        } catch (_e) { /* next */ }
+      }
+      return null;
     }
 
     async resolveFigure(_ref, qdata, bankRef) {
@@ -758,6 +931,7 @@
     isBank,
     bankMeta,
     extractMcAnswers,
+    buildCategorizationGroups,
     TauriSource,
     DirectorySource,
     ZipSource,

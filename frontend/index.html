@@ -140,7 +140,7 @@ body:not(.tauri) #shell{height:100vh;}
 .bc-preview{font-size:.87rem;color:var(--ink4);margin-top:.28rem;line-height:1.55;font-style:italic;border-left:2px solid var(--border);padding-left:.5rem;}
 .bc-footer{display:flex;align-items:center;justify-content:space-between;margin-top:.55rem;}
 .bc-badges{display:flex;flex-wrap:wrap;gap:0;}
-.bc-actions{display:flex;gap:.3rem;flex-shrink:0;}
+.bc-actions{display:flex;gap:.3rem;flex-shrink:0;flex-wrap:wrap;justify-content:flex-end;}
 
 /* ── Badges ── */
 .badge{display:inline-block;font-family:var(--font-m);font-size:.9rem;font-weight:500;padding:.09rem .36rem;border-radius:3px;margin:.12rem .08rem 0 0;letter-spacing:.03em;}
@@ -171,6 +171,31 @@ body:not(.tauri) #shell{height:100vh;}
 .ans-ok{border-color:rgba(26,122,53,.35);background:rgba(26,122,53,.06);color:var(--green);}
 .q-sol{border-left:3px solid var(--accent);padding:.48rem .72rem;background:var(--accent-dim);border-radius:0 5px 5px 0;font-size:.94rem;color:var(--ink2);line-height:1.65;margin-top:.38rem;}
 .sol-lbl{font-family:var(--font-m);font-size:.87rem;font-weight:500;color:var(--accent);text-transform:uppercase;letter-spacing:.09em;margin-bottom:.2rem;}
+
+/* ── Categorization groups ── */
+.cat-groups{display:flex;flex-direction:column;gap:.45rem;margin-bottom:.38rem;}
+.cat-grp{border:1px solid var(--border);border-radius:5px;overflow:hidden;background:var(--surface);}
+.cat-grp-t{font-size:.9rem;font-weight:600;color:var(--ink2);padding:.3rem .62rem;background:var(--bg3);border-bottom:1px solid var(--border2);}
+.cat-grp .ans-opt,.cat-grp .ans-ok{border:none;border-bottom:1px solid var(--border2);border-radius:0;}
+.cat-grp .ans-opt:last-child,.cat-grp .ans-ok:last-child{border-bottom:none;}
+.cat-grp-dis .cat-grp-t{color:var(--ink3);font-style:italic;}
+
+/* ── YAML / prompts modal ── */
+#yaml-modal{position:fixed;inset:0;background:rgba(26,25,22,.45);display:none;align-items:center;justify-content:center;z-index:1000;padding:1.5rem;}
+#yaml-modal.open{display:flex;}
+.ym-panel{background:var(--bg);border:1px solid var(--border);border-radius:var(--r2);box-shadow:var(--sh2);width:min(980px,100%);max-height:90vh;display:flex;flex-direction:column;overflow:hidden;}
+.ym-head{display:flex;align-items:flex-start;justify-content:space-between;gap:.7rem;padding:.85rem 1.1rem .6rem;}
+.ym-title{font-family:var(--font-d);font-size:1.15rem;color:var(--ink);}
+.ym-sub{font-family:var(--font-m);font-size:.85rem;color:var(--ink4);margin-top:.1rem;word-break:break-all;}
+.ym-tabs{display:flex;gap:.25rem;padding:.45rem 1.1rem 0;border-bottom:1px solid var(--border);background:var(--bg2);}
+.ym-tab{border:1px solid var(--border);border-bottom:none;background:var(--bg3);color:var(--ink3);font-family:var(--font-m);font-size:.85rem;padding:.3rem .7rem;border-radius:var(--r) var(--r) 0 0;cursor:pointer;}
+.ym-tab.on{background:var(--bg);color:var(--ink);font-weight:600;}
+.ym-body{flex:1;overflow-y:auto;padding:.9rem 1.1rem 1.1rem;}
+.ym-pre{font-family:var(--font-m);font-size:.82rem;line-height:1.55;white-space:pre-wrap;word-break:break-word;background:var(--surface);border:1px solid var(--border2);border-radius:var(--r);padding:.7rem .85rem;color:var(--ink2);margin:0;}
+.gp-meta{font-family:var(--font-m);font-size:.85rem;color:var(--ink3);margin-bottom:.7rem;}
+.gp-item{margin-bottom:.65rem;border-left:3px solid var(--accent);background:var(--accent-dim);border-radius:0 5px 5px 0;padding:.5rem .75rem;}
+.gp-k{font-family:var(--font-m);font-size:.8rem;font-weight:600;color:var(--accent);text-transform:uppercase;letter-spacing:.08em;margin-bottom:.2rem;}
+.gp-v{font-size:.93rem;color:var(--ink2);white-space:pre-wrap;line-height:1.6;}
 
 /* ── Empty ── */
 #empty{display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;padding:2rem;text-align:center;color:var(--ink4);}
@@ -230,14 +255,18 @@ body:not(.tauri) #shell{height:100vh;}
         </div>
       </div>
 
-      <div class="sb-sec">
-        <span class="sb-lbl">Repository</span>
-        <input id="path-inp" class="inp" type="text" placeholder="/path/to/problem-bank" spellcheck="false"
-               onkeydown="if(event.key==='Enter')loadRepo()">
-        <div class="inp-row">
-          <button class="btn btn-p" style="flex:1" onclick="loadRepo()">Load</button>
-          <button class="btn" id="btn-choose-folder" style="display:none;flex:1" onclick="chooseFolder()">Choose folder</button>
-          <button class="btn btn-icon" onclick="clearAll()" title="Clear">✕</button>
+      <div class="sb-sec" id="repo-sec">
+        <span class="sb-lbl" id="repo-lbl">Repository</span>
+        <div id="repo-body">
+          <input id="path-inp" class="inp" type="text" placeholder="/path/to/problem-bank" spellcheck="false"
+                 onkeydown="if(event.key==='Enter')loadRepo()">
+          <div class="inp-row">
+            <button class="btn btn-p" id="btn-load" style="flex:1" onclick="loadRepo()">Load</button>
+            <button class="btn" id="btn-choose-folder" style="display:none;flex:1" onclick="chooseFolder()">Choose folder</button>
+            <button class="btn btn-icon" onclick="clearAll()" title="Clear">✕</button>
+          </div>
+          <button class="btn btn-sm btn-full" id="btn-browse-local" style="display:none" onclick="browseLocalFolder()">📂 Browse a local folder…</button>
+          <button class="btn btn-sm btn-full" id="btn-use-bundle" style="display:none" onclick="useBundledBanks()">↩ Use bundled banks</button>
         </div>
       </div>
 
@@ -304,9 +333,31 @@ body:not(.tauri) #shell{height:100vh;}
   </div>
 
 </div>
+<div id="yaml-modal" onclick="if(event.target===this)closeYamlModal()">
+  <div class="ym-panel">
+    <div class="ym-head">
+      <div style="flex:1;min-width:0">
+        <div class="ym-title" id="ym-title">Bank</div>
+        <div class="ym-sub" id="ym-sub"></div>
+      </div>
+      <div style="display:flex;gap:.3rem;flex-shrink:0">
+        <button class="btn btn-sm" onclick="copyModalYaml()">⧉ Copy YAML</button>
+        <button class="btn btn-sm" onclick="downloadModalYaml()">⬇ .yaml</button>
+        <button class="btn btn-sm btn-icon" onclick="closeYamlModal()" title="Close">✕</button>
+      </div>
+    </div>
+    <div class="ym-tabs">
+      <button class="ym-tab" id="ym-tab-prompts" onclick="showYamlTab('prompts')">Generation prompts</button>
+      <button class="ym-tab" id="ym-tab-yaml" onclick="showYamlTab('yaml')">Raw YAML</button>
+    </div>
+    <div class="ym-body" id="ym-prompts"></div>
+    <div class="ym-body" id="ym-yaml-wrap" style="display:none"><pre class="ym-pre" id="ym-pre"></pre></div>
+  </div>
+</div>
 <div id="toast"></div>
 
 <script src="https://cdn.jsdelivr.net/npm/js-yaml@4.1.0/dist/js-yaml.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
 <script src="bank-source.js"></script>
 <script src="exam-export.js"></script>
 
@@ -358,6 +409,7 @@ function indexRepoRefs(data) {
     inp.value = S.bankSource.getDisplayPath();
     document.getElementById('btn-choose-folder').style.display = 'none';
     hideDl();
+    tuckAwaySourceSection();
     const hint = document.getElementById('empty-hint');
     if (hint) {
       hint.innerHTML = 'Bundled problem banks load automatically. Browse, add to cart, and preview exams — no folder picker needed.';
@@ -376,6 +428,53 @@ function indexRepoRefs(data) {
   }
   hideDl();
 })();
+
+// ── Source section (tucked away when banks are bundled) ────────────────────
+function tuckAwaySourceSection() {
+  const sec  = document.getElementById('repo-sec');
+  const lbl  = document.getElementById('repo-lbl');
+  const body = document.getElementById('repo-body');
+  if (!sec || !lbl || !body) return;
+  // bundled banks are the content — park the loader at the bottom, collapsed
+  document.getElementById('sb-scroll').appendChild(sec);
+  body.style.display = 'none';
+  lbl.style.cursor = 'pointer';
+  lbl.style.userSelect = 'none';
+  lbl.style.display = 'flex';
+  lbl.style.alignItems = 'center';
+  lbl.style.justifyContent = 'space-between';
+  lbl.innerHTML = 'Source <span id="repo-chev" style="font-size:.8rem;transition:transform .17s">›</span>';
+  lbl.onclick = () => {
+    const open = body.style.display === 'none';
+    body.style.display = open ? 'block' : 'none';
+    const ch = document.getElementById('repo-chev');
+    if (ch) ch.style.transform = open ? 'rotate(90deg)' : '';
+  };
+  const loadBtn = document.getElementById('btn-load');
+  if (loadBtn) { loadBtn.textContent = '↺ Reload'; loadBtn.classList.remove('btn-p'); }
+  if (window.showDirectoryPicker) {
+    document.getElementById('btn-browse-local').style.display = 'block';
+  }
+}
+
+async function browseLocalFolder() {
+  try {
+    const ds = new EstelaBankSource.DirectorySource();
+    await ds.ensureRoot();
+    S.bankSource = ds;
+    document.getElementById('path-inp').value = ds.getDisplayPath();
+    if (window.__ESTELA_BUNDLE__) document.getElementById('btn-use-bundle').style.display = 'block';
+    await loadRepo();
+  } catch (e) { toast('Error: ' + e); }
+}
+
+async function useBundledBanks() {
+  if (!window.__ESTELA_BUNDLE__) return;
+  S.bankSource = new EstelaBankSource.BundleSource();
+  document.getElementById('btn-use-bundle').style.display = 'none';
+  document.getElementById('path-inp').value = S.bankSource.getDisplayPath();
+  await loadRepo();
+}
 
 // ── Theme ──────────────────────────────────────────────────────────────────
 function applyTheme(t) {
@@ -598,6 +697,10 @@ function bankCardHTML(b, topic) {
     <div class="bc-footer">
       <div class="bc-badges">${badges}</div>
       <div class="bc-actions">
+        <button class="btn btn-sm" onclick="openYamlModal(${attr(path)})" title="View source YAML & generation prompts">📄 YAML</button>
+        ${meta.has_qti !== false
+          ? `<button class="btn btn-sm" onclick="downloadBankQti(${attr(path)})" title="Download Canvas QTI package (New Quizzes import)">⬇ QTI</button>`
+          : ''}
         <button class="btn btn-sm" onclick="toggleExp(${attr(path)},${attr(topic)})">
           ${isExp?'▾ Collapse':'▸ Preview'}
         </button>
@@ -636,6 +739,12 @@ function qHTML(q, i, bankPath) {
     (a.label !== 'Answer' ? `<b>${a.label}.</b> ` : `<b>${a.label}:</b> `) +
     `${a.text}</div>`
   ).join('');
+  const groups = (q.groups||[]).map(g =>
+    `<div class="cat-grp${g.correct?'':' cat-grp-dis'}">
+      <div class="cat-grp-t">${g.title}</div>
+      ${g.items.map(t=>`<div class="${g.correct?'ans-ok':'ans-opt'}">${t}</div>`).join('')}
+    </div>`
+  ).join('');
   const sol = q.solution
     ? `<div class="q-sol"><div class="sol-lbl">Solution</div>${q.solution}</div>` : '';
   const fig = q.fig_url
@@ -652,6 +761,7 @@ function qHTML(q, i, bankPath) {
     <div class="q-body" id="qb-${id}">
       <div class="q-text">${q.body}</div>
       ${fig}
+      ${groups?`<div class="cat-groups">${groups}</div>`:''}
       <div class="ans-list">${answers}</div>
       ${sol}
     </div>
@@ -797,16 +907,19 @@ function updateExportBtns() {
        <div style="font-family:var(--font-m);font-size:.9rem;color:var(--ink4);text-transform:uppercase;letter-spacing:.07em;margin-bottom:.18rem">${label}</div>
        <div style="display:flex;flex-wrap:wrap;gap:.22rem">${btns}</div>
      </div>`;
-  el.innerHTML =
-    row('Preview Exam', vs.map(v=>`<button class="btn btn-xs" onclick="doPreview(${v},false)">👁 ${versionLabel(v)}</button>`).join('')) +
-    row('Preview Key',  vs.map(v=>`<button class="btn btn-xs" onclick="doPreview(${v},true)">👁 ${versionLabel(v)}</button>`).join('')) +
+  const tauriRows = window.__TAURI__ ? (
     row('Export Bundle', `<button class="btn btn-xs btn-p" onclick="doExportBundle()">⬇ Export All (Exams + Keys + Images)</button>`) +
     row('Export single .tex',
       vs.map(v=>`<button class="btn btn-xs" onclick="doTex(${v},${attr('exam')})">Exam ${versionLabel(v)}</button>`).join('') +
       vs.map(v=>`<button class="btn btn-xs" onclick="doTex(${v},${attr('key')})">Key ${versionLabel(v)}</button>`).join('')) +
     row('Export .docx (Word)',
       vs.map(v=>`<button class="btn btn-xs" onclick="doDocx(${v},${attr('exam')})">Exam ${versionLabel(v)}</button>`).join('') +
-      vs.map(v=>`<button class="btn btn-xs" onclick="doDocx(${v},${attr('key')})">Key ${versionLabel(v)}</button>`).join(''));
+      vs.map(v=>`<button class="btn btn-xs" onclick="doDocx(${v},${attr('key')})">Key ${versionLabel(v)}</button>`).join(''))
+  ) : row('Print / PDF', `<span style="font-family:var(--font-m);font-size:.82rem;color:var(--ink4)">Open a preview, then use the browser&#39;s Print → Save as PDF.</span>`);
+  el.innerHTML =
+    row('Preview Exam', vs.map(v=>`<button class="btn btn-xs" onclick="doPreview(${v},false)">👁 ${versionLabel(v)}</button>`).join('')) +
+    row('Preview Key',  vs.map(v=>`<button class="btn btn-xs" onclick="doPreview(${v},true)">👁 ${versionLabel(v)}</button>`).join('')) +
+    tauriRows;
 }
 
 function _cartBody() {
@@ -915,6 +1028,117 @@ function dlBlob(blob, name) {
   const a = Object.assign(document.createElement('a'), {href:url, download:name});
   document.body.appendChild(a); a.click();
   setTimeout(()=>{ URL.revokeObjectURL(url); a.remove(); }, 800);
+}
+
+// ── YAML / prompts modal ────────────────────────────────────────────────────
+let _ymState = null;
+
+async function openYamlModal(path) {
+  try {
+    const ref = S.bankRefs.get(path) || path;
+    let text = null;
+    if (typeof S.bankSource.loadBankText === 'function') {
+      try { text = await S.bankSource.loadBankText(ref); } catch (_e) {}
+    }
+    let rawData = null, dumped = false;
+    if (text) {
+      try { rawData = EstelaBankSource.parseYaml(text); } catch (_e) {}
+    }
+    if (!rawData) {
+      const result = await S.bankSource.loadBank(ref);
+      rawData = result.rawData;
+      if (result.bankRef) S.bankRefs.set(path, result.bankRef);
+      if (!text) { text = jsyaml.dump(rawData, {lineWidth: 110}); dumped = true; }
+    }
+    const meta = EstelaBankSource.bankMeta(rawData);
+    _ymState = { path, meta, text };
+    document.getElementById('ym-title').textContent = meta.title || 'Bank';
+    document.getElementById('ym-sub').textContent =
+      (meta.bank_id ? meta.bank_id + ' · ' : '') + path + (dumped ? ' · re-serialized (original comments not shown)' : '');
+    document.getElementById('ym-pre').textContent = text || '';
+    const prompts = extractPrompts(rawData?.bank_info);
+    document.getElementById('ym-prompts').innerHTML = promptsHtml(rawData?.bank_info, prompts);
+    showYamlTab(prompts.length ? 'prompts' : 'yaml');
+    document.getElementById('yaml-modal').classList.add('open');
+  } catch (e) { toast('Error: ' + e); }
+}
+
+function closeYamlModal() {
+  document.getElementById('yaml-modal').classList.remove('open');
+}
+
+function showYamlTab(which) {
+  document.getElementById('ym-tab-prompts').classList.toggle('on', which === 'prompts');
+  document.getElementById('ym-tab-yaml').classList.toggle('on', which === 'yaml');
+  document.getElementById('ym-prompts').style.display = which === 'prompts' ? 'block' : 'none';
+  document.getElementById('ym-yaml-wrap').style.display = which === 'yaml' ? 'block' : 'none';
+}
+
+function extractPrompts(info) {
+  const raw = info?.['generation prompts'] ?? info?.generation_prompts;
+  const out = [];
+  const push = (label, val) => {
+    if (val == null) return;
+    const s = String(val).trim();
+    if (s) out.push({ label: String(label), text: s });
+  };
+  if (Array.isArray(raw)) {
+    raw.forEach((entry, i) => {
+      if (entry && typeof entry === 'object' && !Array.isArray(entry)) {
+        for (const [k, v] of Object.entries(entry)) push(k, v);
+      } else {
+        push(`prompt ${i + 1}`, entry);
+      }
+    });
+  } else if (raw && typeof raw === 'object') {
+    for (const [k, v] of Object.entries(raw)) push(k, v);
+  } else if (raw != null) {
+    push('prompt', raw);
+  }
+  return out;
+}
+
+function promptsHtml(info, prompts) {
+  const det = info?.['generation details'] || info?.generation_details || {};
+  const bits = [];
+  if (det.model) bits.push(`Model: ${esc(String(det.model))}${det.version != null ? ' ' + esc(String(det.version)) : ''}`);
+  const lu = det['last updated'] || det.last_updated;
+  if (lu) bits.push(`Prompts last updated: ${esc(String(lu))}`);
+  const head = bits.length ? `<div class="gp-meta">${bits.join(' · ')}</div>` : '';
+  if (!prompts.length) {
+    return head + '<div class="gp-meta">No generation prompts recorded in this bank&#39;s YAML.</div>';
+  }
+  return head + prompts.map(p =>
+    `<div class="gp-item"><div class="gp-k">${esc(p.label)}</div><div class="gp-v">${esc(p.text)}</div></div>`
+  ).join('');
+}
+
+function copyModalYaml() {
+  if (!_ymState?.text) return;
+  if (navigator.clipboard?.writeText) {
+    navigator.clipboard.writeText(_ymState.text).then(() => toast('YAML copied'), () => toast('Copy failed'));
+  } else { toast('Clipboard unavailable'); }
+}
+
+function downloadModalYaml() {
+  if (!_ymState?.text) return;
+  const name = (_ymState.meta?.bank_id || 'bank') + '.yaml';
+  dlBlob(new Blob([_ymState.text], { type: 'text/yaml;charset=utf-8' }), name);
+}
+
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeYamlModal(); });
+
+// ── Canvas QTI download ─────────────────────────────────────────────────────
+async function downloadBankQti(path) {
+  try {
+    if (typeof S.bankSource.getQtiPackage !== 'function') { toast('Not supported by this source'); return; }
+    toast('Preparing QTI package…');
+    const ref = S.bankRefs.get(path) || path;
+    const pkg = await S.bankSource.getQtiPackage(ref);
+    if (!pkg) { toast('No Canvas QTI package found for this bank'); return; }
+    dlBlob(new Blob([pkg.bytes], { type: 'application/zip' }), pkg.filename);
+    toast('Downloaded ' + pkg.filename);
+  } catch (e) { toast('Error: ' + e); }
 }
 
 // ── Cart persistence ────────────────────────────────────────────────────────

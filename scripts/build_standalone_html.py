@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""Build a single-file ESTELA Exam Builder with embedded problem banks (zip + base64)."""
+"""Build a single-file ESTELA Exam Builder with embedded problem banks (zip + base64).
+
+Bank YAMLs, figure images, and Canvas QTI packages (zips containing an
+imsmanifest.xml next to each bank YAML) are bundled so the standalone page can
+offer per-bank "Download Canvas QTI" without any backend.
+"""
 
 from __future__ import annotations
 
@@ -32,13 +37,27 @@ def should_skip_path(parts: tuple[str, ...]) -> bool:
     return any(p in SKIP_DIRS for p in parts)
 
 
+def is_qti_zip(path: Path) -> bool:
+    """Canvas QTI packages are zips with an imsmanifest.xml at the root."""
+    try:
+        with zipfile.ZipFile(path) as zf:
+            return "imsmanifest.xml" in zf.namelist()
+    except Exception:
+        return False
+
+
 def should_include_file(path: Path) -> bool:
     ext = path.suffix.lower()
-    return ext in BANK_EXT or ext in IMAGE_EXT
+    if ext in BANK_EXT or ext in IMAGE_EXT:
+        return True
+    if ext == ".zip" and is_qti_zip(path):
+        return True
+    return False
 
 
 def build_zip_bytes(repo_root: Path, courses: list[str]) -> bytes:
     buf = io.BytesIO()
+    qti_count = 0
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as zf:
         for course in courses:
             course_path = repo_root / course
@@ -56,7 +75,13 @@ def build_zip_bytes(repo_root: Path, courses: list[str]) -> bytes:
                     continue
                 if not should_include_file(fpath):
                     continue
-                zf.write(fpath, rel.as_posix())
+                # nested zips (QTI packages) are already compressed — store as-is
+                if fpath.suffix.lower() == ".zip":
+                    qti_count += 1
+                    zf.write(fpath, rel.as_posix(), compress_type=zipfile.ZIP_STORED)
+                else:
+                    zf.write(fpath, rel.as_posix())
+    print(f"Embedded Canvas QTI packages: {qti_count}", file=sys.stderr)
     return buf.getvalue()
 
 
