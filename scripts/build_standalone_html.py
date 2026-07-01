@@ -161,14 +161,14 @@ def main() -> int:
         "--output",
         type=Path,
         default=None,
-        help="Output file (default: frontend/standalone.html)",
+        help="Output file (default: docs/standalone.html, published via GitHub Pages)",
     )
     args = parser.parse_args()
 
     repo_root = args.repo.resolve()
     frontend_dir = repo_root / "frontend"
     template_path = (args.template or frontend_dir / "index.html").resolve()
-    output_path = (args.output or frontend_dir / "standalone.html").resolve()
+    output_path = (args.output or repo_root / "docs" / "standalone.html").resolve()
     label = args.label or ", ".join(args.courses)
 
     if not template_path.is_file():
