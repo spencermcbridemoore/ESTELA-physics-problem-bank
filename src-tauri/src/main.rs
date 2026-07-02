@@ -132,24 +132,123 @@ fn html2tex(text: &str) -> String {
     // strip remaining HTML tags
     let tag_re = Regex::new(r"<[^>]+>").unwrap();
     let result = tag_re.replace_all(&result, "").trim().to_string();
-    // Escape bare < and > outside math delimiters as $<$ / $>$ so LaTeX renders them
-    let mut out = String::with_capacity(result.len());
-    let bytes = result.as_bytes();
+    // Convert bare < / > (outside math) to $<$ / $>$, and escape LaTeX text
+    // specials (& % # _ ~ ^) that appear OUTSIDE math. Math spans — \(...\),
+    // \[...\], $$...$$ and $...$ — are located by their matching closer and
+    // copied through verbatim, so real math (including $^{}$/$_{}$ from
+    // <sup>/<sub>, even when a superscript directly abuts a subscript) is left
+    // untouched. A `$` with no matching partner is a literal dollar sign, so it
+    // is escaped as \$ (this keeps stray/odd `$` from swallowing the rest of the
+    // text into fake math). Iterate over chars, not bytes, so multi-byte UTF-8
+    // is not corrupted.
+    let chars: Vec<char> = result.chars().collect();
+    let n = chars.len();
+    let mut out = String::with_capacity(result.len() + 16);
     let mut i = 0;
-    let mut in_math = false;
-    while i < bytes.len() {
-        // Detect \( \) \[ \] math boundaries
-        if i + 1 < bytes.len() && bytes[i] == b'\\' {
-            match bytes[i + 1] {
-                b'(' | b'[' => { in_math = true;  out.push('\\'); out.push(bytes[i+1] as char); i += 2; continue; }
-                b')' | b']' => { in_math = false; out.push('\\'); out.push(bytes[i+1] as char); i += 2; continue; }
-                _ => {}
+    while i < n {
+        let c = chars[i];
+
+        // \( … \)  and  \[ … \]  — copy the whole math span verbatim.
+        if c == '\\' && i + 1 < n && (chars[i + 1] == '(' || chars[i + 1] == '[') {
+            let close = if chars[i + 1] == '(' { ')' } else { ']' };
+            if let Some(e) = find_pair(&chars, i + 2, '\\', close) {
+                for k in i..=e { out.push(chars[k]); }
+                i = e + 1;
+                continue;
             }
+            // no closer (malformed): treat the dangling opener as literal text
+            // so we don't leave math mode open around the text-escaped tail
+            out.push_str(r"\textbackslash{}"); out.push(chars[i + 1]); i += 2; continue;
         }
-        if !in_math && bytes[i] == b'<' { out.push_str("$<$"); i += 1; continue; }
-        if !in_math && bytes[i] == b'>' { out.push_str("$>$"); i += 1; continue; }
-        out.push(bytes[i] as char);
+
+        // Any other backslash: a control sequence (\textbf, \frac) or an
+        // already-escaped char (\%, \&, \\) — copy the pair verbatim so we never
+        // split a command or double-escape. A trailing lone backslash, which is
+        // invalid on its own in LaTeX, becomes \textbackslash{}.
+        if c == '\\' {
+            if i + 1 < n { out.push('\\'); out.push(chars[i + 1]); i += 2; }
+            else { out.push_str(r"\textbackslash{}"); i += 1; }
+            continue;
+        }
+
+        // $$ … $$ (display) then $ … $ (inline): copy the span verbatim if a
+        // matching closer exists; otherwise the $ is a literal dollar sign.
+        if c == '$' {
+            if i + 1 < n && chars[i + 1] == '$' {
+                if let Some(e) = find_pair(&chars, i + 2, '$', '$') {
+                    for k in i..=e { out.push(chars[k]); }
+                    i = e + 1;
+                    continue;
+                }
+                out.push_str(r"\$\$"); i += 2; continue;
+            }
+            if let Some(e) = find_char(&chars, i + 1, '$') {
+                for k in i..=e { out.push(chars[k]); }
+                i = e + 1;
+                continue;
+            }
+            out.push_str(r"\$"); i += 1; continue;
+        }
+
+        // Outside math: escape LaTeX text specials.
+        match c {
+            '<' => out.push_str("$<$"),
+            '>' => out.push_str("$>$"),
+            '&' => out.push_str(r"\&"),
+            '%' => out.push_str(r"\%"),
+            '#' => out.push_str(r"\#"),
+            '_' => out.push_str(r"\_"),
+            '~' => out.push_str(r"\textasciitilde{}"),
+            '^' => out.push_str(r"\textasciicircum{}"),
+            _ => out.push(c),
+        }
         i += 1;
+    }
+    out
+}
+
+/// Index of the second char of the first `a`+`b` pair at/after `start`.
+fn find_pair(chars: &[char], start: usize, a: char, b: char) -> Option<usize> {
+    let mut j = start;
+    while j + 1 < chars.len() {
+        if chars[j] == a && chars[j + 1] == b {
+            return Some(j + 1);
+        }
+        j += 1;
+    }
+    None
+}
+
+/// Index of the first `target` char at/after `start`.
+fn find_char(chars: &[char], start: usize, target: char) -> Option<usize> {
+    let mut j = start;
+    while j < chars.len() {
+        if chars[j] == target {
+            return Some(j);
+        }
+        j += 1;
+    }
+    None
+}
+
+/// Escape every LaTeX special for a PLAIN-TEXT field (no math expected), e.g.
+/// the exam title injected into \section*{} / \bfseries.
+fn latex_escape_text(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 8);
+    for c in s.chars() {
+        match c {
+            '\\' => out.push_str(r"\textbackslash{}"),
+            '&' => out.push_str(r"\&"),
+            '%' => out.push_str(r"\%"),
+            '$' => out.push_str(r"\$"),
+            '#' => out.push_str(r"\#"),
+            '_' => out.push_str(r"\_"),
+            '{' => out.push_str(r"\{"),
+            '}' => out.push_str(r"\}"),
+            '~' => out.push_str(r"\textasciitilde{}"),
+            '^' => out.push_str(r"\textasciicircum{}"),
+            _ => out.push(c),
+        }
     }
     out
 }
@@ -905,7 +1004,9 @@ fn build_exam_latex(cart: &Value, version: i64, title: &str) -> String {
 
     format!(
         r"\documentclass[12pt,addpoints]{{exam}}
-\usepackage{{amsmath,amssymb,physics,geometry,microtype,graphicx}}
+\usepackage[utf8]{{inputenc}}
+\usepackage[T1]{{fontenc}}
+\usepackage{{amsmath,amssymb,physics,geometry,microtype,graphicx,textcomp,gensymb}}
 \geometry{{margin=1in}}
 {}%\printanswers  % uncomment to show answers (e.g. for instructor copy)
 
@@ -922,7 +1023,7 @@ Name:\underline{{\hspace{{8cm}}}} \hfill Score: \underline{{\hspace{{2cm}}}} / \
 \end{{questions}}
 \end{{document}}
 ",
-        graphicspath_line, title, version_label(version), body
+        graphicspath_line, latex_escape_text(title), version_label(version), body
     )
 }
 
@@ -982,7 +1083,9 @@ fn build_key_latex(cart: &Value, version: i64, title: &str) -> String {
     let rows_str = rows.join("\n");
     format!(
         r"\documentclass{{article}}
-\usepackage{{amsmath,geometry}}
+\usepackage[utf8]{{inputenc}}
+\usepackage[T1]{{fontenc}}
+\usepackage{{amsmath,geometry,textcomp,gensymb}}
 \geometry{{margin=1in}}
 \begin{{document}}
 \section*{{{} --- Version {} --- Answer Key}}
@@ -991,7 +1094,7 @@ fn build_key_latex(cart: &Value, version: i64, title: &str) -> String {
 \end{{enumerate}}
 \end{{document}}
 ",
-        title, version_label(version), rows_str
+        latex_escape_text(title), version_label(version), rows_str
     )
 }
 
@@ -1226,18 +1329,47 @@ async fn fetch_remote_courses() -> Result<Vec<String>, String> {
         "https://api.github.com/repos/{}/contents/",
         UPSTREAM_REPO
     );
-    let resp: Vec<Value> = client
+    let mut req = client
         .get(&url)
-        .header("Accept", "application/vnd.github.v3+json")
+        .header("Accept", "application/vnd.github.v3+json");
+    // Optional token raises the anonymous 60 req/hr limit (5000/hr authenticated).
+    if let Ok(token) = std::env::var("GITHUB_TOKEN") {
+        if !token.trim().is_empty() {
+            req = req.header("Authorization", format!("Bearer {}", token.trim()));
+        }
+    }
+    let resp = req
         .send()
         .await
-        .map_err(|e| format!("Network error: {}", e))?
+        .map_err(|e| format!("Network error: {}", e))?;
+    let status = resp.status();
+    let body: Value = resp
         .json()
         .await
         .map_err(|e| format!("Parse error: {}", e))?;
 
+    // GitHub returns a JSON array on success, but a JSON object on error
+    // (e.g. rate limiting) — surface that clearly instead of a cryptic parse error.
+    let arr = match body.as_array() {
+        Some(a) => a,
+        None => {
+            let msg = body
+                .get("message")
+                .and_then(|m| m.as_str())
+                .unwrap_or("unexpected non-array response");
+            if status.as_u16() == 403 && msg.to_lowercase().contains("rate limit") {
+                return Err(format!(
+                    "GitHub API rate limit reached (anonymous use is 60 requests/hour). \
+                     Set a GITHUB_TOKEN environment variable to raise it. ({})",
+                    msg
+                ));
+            }
+            return Err(format!("GitHub API error (HTTP {}): {}", status.as_u16(), msg));
+        }
+    };
+
     let skip = SKIP_COURSES;
-    let courses: Vec<String> = resp
+    let courses: Vec<String> = arr
         .iter()
         .filter(|item| item.get("type").and_then(|t| t.as_str()) == Some("dir"))
         .filter_map(|item| item.get("name").and_then(|n| n.as_str()).map(String::from))
@@ -1258,11 +1390,19 @@ async fn download_courses(courses: Vec<String>, dest_folder: String) -> Result<S
         "https://github.com/{}/archive/refs/heads/main.zip",
         UPSTREAM_REPO
     );
-    let bytes = client
+    let resp = client
         .get(&zip_url)
         .send()
         .await
-        .map_err(|e| format!("Download error: {}", e))?
+        .map_err(|e| format!("Download error: {}", e))?;
+    if !resp.status().is_success() {
+        return Err(format!(
+            "Download failed: GitHub returned HTTP {} for {}",
+            resp.status().as_u16(),
+            zip_url
+        ));
+    }
+    let bytes = resp
         .bytes()
         .await
         .map_err(|e| format!("Read error: {}", e))?;
