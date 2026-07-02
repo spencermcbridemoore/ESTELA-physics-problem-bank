@@ -112,6 +112,16 @@ def build_standalone_html(
     html = inline_script(html, "bank-source.js", (frontend_dir / "bank-source.js").read_text(encoding="utf-8"))
     html = inline_script(html, "exam-export.js", (frontend_dir / "exam-export.js").read_text(encoding="utf-8"))
 
+    # Enhanced template (frontend/enhanced.html) adds the desktop-parity exporters.
+    # Only inline it when the template actually references it, so the default
+    # index.html build is unchanged.
+    plus_tag = '<script src="exam-export-plus.js"></script>'
+    if plus_tag in html:
+        html = inline_script(
+            html, "exam-export-plus.js",
+            (frontend_dir / "exam-export-plus.js").read_text(encoding="utf-8"),
+        )
+
     zip_bytes = build_zip_bytes(repo_root, courses)
     b64 = base64.b64encode(zip_bytes).decode("ascii")
     mb = len(zip_bytes) / (1024 * 1024)
