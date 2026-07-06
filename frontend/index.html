@@ -216,6 +216,40 @@ body:not(.tauri) #shell{height:100vh;}
 /* ── Loading spinner ── */
 .spin{display:inline-block;width:11px;height:11px;border:2px solid var(--border);border-top-color:var(--accent);border-radius:50%;animation:_spin .55s linear infinite;vertical-align:middle;}
 @keyframes _spin{to{transform:rotate(360deg);}}
+
+/* ── Mobile / responsive ── */
+#nav-toggle{display:none;font-size:1.2rem;line-height:1;padding:.28rem .5rem;}
+#nav-overlay{display:none;position:fixed;inset:0;background:rgba(26,25,22,.45);z-index:1100;}
+body.nav-open #nav-overlay{display:block;}
+@media (max-width:820px){
+  html,body{font-size:16px;}
+  #shell{height:100dvh;}
+  /* sidebar → off-canvas drawer */
+  #sidebar{position:fixed;top:0;left:0;height:100%;width:min(86vw,330px);transform:translateX(-100%);transition:transform .24s ease;z-index:1200;box-shadow:var(--sh2);}
+  body.nav-open #sidebar{transform:none;}
+  #main{width:100%;min-width:0;}
+  #nav-toggle{display:inline-flex;align-items:center;justify-content:center;}
+  #topbar{justify-content:flex-start;gap:.7rem;padding:.6rem 1rem;}
+  .tb-wm{font-size:1.05rem;}
+  .tb-sub{display:none;}
+  #content{padding:1rem .9rem 2.6rem;}
+  /* stats: grid, not a squished row */
+  #stats{display:grid;grid-template-columns:repeat(2,1fr);gap:1px;background:var(--border);}
+  .sc{border-right:none;background:var(--surface);}
+  .sc:last-child{grid-column:1/-1;}
+  .ep-grid{grid-template-columns:1fr;}
+  /* comfortable touch targets */
+  .btn-sm{font-size:.9rem;padding:.4rem .72rem;}
+  .bc-actions{gap:.35rem;}
+  .ci-step{width:28px;height:28px;font-size:1.05rem;}
+  /* wide display math shouldn't blow out the card width */
+  .q-text{overflow-x:auto;}
+  /* full-screen modal on phones */
+  #yaml-modal{padding:0;}
+  .ym-panel{width:100%;height:100%;max-height:100%;border-radius:0;}
+  .ym-head{flex-wrap:wrap;}
+  #toast{left:1rem;right:1rem;bottom:1rem;text-align:center;}
+}
 </style>
 </head>
 <body>
@@ -316,6 +350,7 @@ body:not(.tauri) #shell{height:100vh;}
   <!-- Main -->
   <div id="main">
     <div id="topbar">
+      <button id="nav-toggle" class="btn btn-icon" onclick="toggleNav()" aria-label="Open menu" title="Menu">☰</button>
       <div>
         <div class="tb-wm">Problem Bank <em>Visualizer</em></div>
         <div class="tb-sub">ESTELA Exam Builder · Isomorphic Physics Banks · UCF / NSF-2421299</div>
@@ -333,6 +368,7 @@ body:not(.tauri) #shell{height:100vh;}
   </div>
 
 </div>
+<div id="nav-overlay" onclick="closeNav()"></div>
 <div id="yaml-modal" onclick="if(event.target===this)closeYamlModal()">
   <div class="ym-panel">
     <div class="ym-head">
@@ -403,6 +439,19 @@ function indexRepoRefs(data) {
     if (dlSec) dlSec.closest('.sb-sec').style.display = 'none';
   };
   const inp = document.getElementById('path-inp');
+
+  if (S.bankSource.id === 'remote') {
+    inp.readOnly = true;
+    inp.value = S.bankSource.getDisplayPath();
+    document.getElementById('btn-choose-folder').style.display = 'none';
+    hideDl();
+    const hint = document.getElementById('empty-hint');
+    if (hint) {
+      hint.innerHTML = 'Problem banks load automatically from the remote bank service. Browse, add to cart, and preview exams — no folder needed.';
+    }
+    loadRepo().catch(e => toast('Error: ' + e));
+    return;
+  }
 
   if (S.bankSource.id === 'bundle') {
     inp.readOnly = true;
@@ -487,6 +536,11 @@ function toggleTheme() {
   applyTheme(S.theme);
 }
 applyTheme(S.theme);
+
+// ── Mobile nav drawer ────────────────────────────────────────────────────────
+function toggleNav() { document.body.classList.toggle('nav-open'); }
+function closeNav()  { document.body.classList.remove('nav-open'); }
+document.addEventListener('keydown', e => { if (e.key === 'Escape') closeNav(); });
 // restore last used path
 (function(){ const p = localStorage.getItem('estela_path'); if (p) document.getElementById('path-inp').value = p; })();
 
@@ -525,6 +579,9 @@ async function loadRepo() {
     if (S.bankSource.id === 'bundle') {
       await S.bankSource.ensureReady();
       document.getElementById('path-inp').value = S.bankSource.getDisplayPath();
+    } else if (S.bankSource.id === 'remote') {
+      document.getElementById('path-inp').value = S.bankSource.getDisplayPath();
+      // rootRef is unused by RemoteSource.scan (it reads /tree from apiBase)
     } else if (S.bankSource.id === 'directory') {
       rootRef = await S.bankSource.ensureRoot();
       document.getElementById('path-inp').value = S.bankSource.getDisplayPath();

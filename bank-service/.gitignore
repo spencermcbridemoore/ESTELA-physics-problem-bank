@@ -1,0 +1,7 @@
+# Local upstream clone (rebuilt on demand — never commit it)
+.cache/
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/

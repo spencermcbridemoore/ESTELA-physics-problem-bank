@@ -1,0 +1,4 @@
+# ESTELA Bank Service — reference implementation deps (kept intentionally small).
+fastapi>=0.110,<1.0
+uvicorn[standard]>=0.27,<1.0
+# git is required on the host PATH (used via subprocess for clone/fetch/ls-files).

@@ -667,6 +667,85 @@
     return '';
   }
 
+  // ── Shared flat-path scan (used by ZipSource and RemoteSource) ────────────
+  // Any source that can produce (a) a flat list of logical paths and (b) an
+  // async text reader can be scanned identically: group by course/topic, parse
+  // each candidate YAML client-side, and emit {course:{topic:[{path,meta,bankRef}]}}.
+  // makeRef(path, meta, bankDir) returns a source-specific BankRef.
+
+  async function collectBanksFromPaths(courseName, topicName, paths, readText, makeRef) {
+    const prefix = `${courseName}/${topicName}/`;
+    const banks = [];
+    for (const p of paths) {
+      if (!p.startsWith(prefix)) continue;
+      const ext = p.split('.').pop()?.toLowerCase();
+      if (ext !== 'yaml' && ext !== 'yml') continue;
+      const relFromTopic = p.slice(prefix.length).split('/');
+      if (relFromTopic.some((part) => SKIP_DIRS.includes(part))) continue;
+
+      let content;
+      try {
+        content = await readText(p);
+      } catch (_e) {
+        continue;
+      }
+      if (!content) continue;
+
+      let data;
+      try {
+        data = parseYaml(content);
+      } catch (_e) {
+        continue;
+      }
+      if (!isBank(data)) continue;
+
+      const status = data.bank_info?.status || '';
+      if (status === 'draft' || status === 'deprecated') continue;
+
+      const bankDir = p.substring(0, p.lastIndexOf('/') + 1);
+      const meta = bankMeta(data);
+      meta.has_qti = paths.some(
+        (z) => z.startsWith(bankDir)
+          && z.toLowerCase().endsWith('.zip')
+          && !z.slice(bankDir.length).includes('/')
+      );
+      const bankRef = makeRef(p, meta, bankDir);
+      banks.push({ path: p, meta, bankRef });
+    }
+    banks.sort((a, b) => a.path.localeCompare(b.path));
+    return banks;
+  }
+
+  async function scanFlatPaths({ paths, readText, makeRef }) {
+    const result = {};
+    const courseNames = new Set();
+    for (const p of paths) {
+      const course = p.split('/')[0];
+      if (course) courseNames.add(course);
+    }
+
+    for (const courseName of [...courseNames].sort()) {
+      if (SKIP_COURSES.includes(courseName) || courseName.startsWith('.')) continue;
+      const courseTopics = {};
+      const topicNames = new Set();
+      for (const p of paths) {
+        if (!p.startsWith(`${courseName}/`)) continue;
+        const topic = p.split('/')[1];
+        if (topic) topicNames.add(topic);
+      }
+
+      for (const topicName of [...topicNames].sort()) {
+        if (topicName.startsWith('.')) continue;
+        const banks = await collectBanksFromPaths(courseName, topicName, paths, readText, makeRef);
+        if (banks.length) courseTopics[topicName] = banks;
+      }
+
+      if (Object.keys(courseTopics).length) result[courseName] = courseTopics;
+    }
+
+    return { data: result };
+  }
+
   class ZipSource {
     constructor() {
       this.id = 'zip';
@@ -729,76 +808,12 @@
 
     async scan() {
       await this.ensureReady();
-      const paths = this._listLogicalPaths();
-      const result = {};
-      const courseNames = new Set();
-      for (const p of paths) {
-        const course = p.split('/')[0];
-        if (course) courseNames.add(course);
-      }
-
-      for (const courseName of [...courseNames].sort()) {
-        if (SKIP_COURSES.includes(courseName) || courseName.startsWith('.')) continue;
-        const courseTopics = {};
-        const topicNames = new Set();
-        for (const p of paths) {
-          if (!p.startsWith(`${courseName}/`)) continue;
-          const topic = p.split('/')[1];
-          if (topic) topicNames.add(topic);
-        }
-
-        for (const topicName of [...topicNames].sort()) {
-          if (topicName.startsWith('.')) continue;
-          const banks = await this._collectBanks(courseName, topicName, paths);
-          if (banks.length) courseTopics[topicName] = banks;
-        }
-
-        if (Object.keys(courseTopics).length) result[courseName] = courseTopics;
-      }
-
-      return { data: result };
-    }
-
-    async _collectBanks(courseName, topicName, paths) {
-      const prefix = `${courseName}/${topicName}/`;
-      const banks = [];
-      for (const p of paths) {
-        if (!p.startsWith(prefix)) continue;
-        const ext = p.split('.').pop()?.toLowerCase();
-        if (ext !== 'yaml' && ext !== 'yml') continue;
-        const relFromTopic = p.slice(prefix.length).split('/');
-        if (relFromTopic.some((part) => SKIP_DIRS.includes(part))) continue;
-
-        let content;
-        try {
-          content = await this._readText(p);
-        } catch (_e) {
-          continue;
-        }
-        if (!content) continue;
-
-        let data;
-        try {
-          data = parseYaml(content);
-        } catch (_e) {
-          continue;
-        }
-        if (!isBank(data)) continue;
-
-        const status = data.bank_info?.status || '';
-        if (status === 'draft' || status === 'deprecated') continue;
-
-        const bankDirZipPath = p.substring(0, p.lastIndexOf('/') + 1);
-        const bankRef = this._makeRef(p, bankMeta(data), { zipPath: p, bankDirZipPath });
-        bankRef.meta.has_qti = paths.some(
-          (z) => z.startsWith(bankDirZipPath)
-            && z.toLowerCase().endsWith('.zip')
-            && !z.slice(bankDirZipPath.length).includes('/')
-        );
-        banks.push({ path: p, meta: bankRef.meta, bankRef });
-      }
-      banks.sort((a, b) => a.path.localeCompare(b.path));
-      return banks;
+      return scanFlatPaths({
+        paths: this._listLogicalPaths(),
+        readText: (p) => this._readText(p),
+        makeRef: (p, meta, bankDir) =>
+          this._makeRef(p, meta, { zipPath: p, bankDirZipPath: bankDir }),
+      });
     }
 
     async loadBank(ref) {
@@ -912,9 +927,201 @@
     }
   }
 
-  // class GitHubSource { ... } — fetch banks from GitHub API / raw URLs
+  // ── RemoteSource ──────────────────────────────────────────────────────────
+  // Live-serving adapter for the "ESTELA Bank Service Protocol v1". Talks to a
+  // thin HTTP service (`apiBase`) that fronts a read-only clone of the upstream
+  // bank repo:
+  //   GET  /version            → { protocol, repo, ref, sha, fetchedAt }
+  //   GET  /tree               → { sha, files: [ "Course/Topic/Bank/Bank.yaml", ... ] }
+  //   GET  /file?path=<rel>    → raw bytes (+ correct Content-Type)
+  // Structurally a ZipSource whose bytes arrive over HTTP instead of from an
+  // in-memory zip: /tree is the flat path list, /file is an entry read. All YAML
+  // parsing stays client-side via the shared helpers — the server never parses.
+  // Figures/QTI are resolved by looking them up in the fetched /tree (then one
+  // /file fetch), never by probing candidate URLs over the network.
+
+  class RemoteSource {
+    constructor(apiBase) {
+      this.id = 'remote';
+      this.label = 'Remote bank service';
+      this._apiBase = String(apiBase || '').replace(/\/+$/, '') + '/';
+      this._sha = null;
+      this._paths = null;
+      this._treeSet = null;
+    }
+
+    getDisplayPath() {
+      return this._apiBase;
+    }
+
+    _url(endpoint) {
+      return this._apiBase + String(endpoint).replace(/^\/+/, '');
+    }
+
+    async _getVersion() {
+      const resp = await fetch(this._url('version'), { headers: { Accept: 'application/json' } });
+      if (!resp.ok) throw new Error(`version ${resp.status}`);
+      return resp.json();
+    }
+
+    /** Load (or refresh) the flat file listing, keyed by upstream commit SHA.
+     * Fast path: once the tree is cached, subsequent reads (figures, QTI) reuse it
+     * with zero network round-trips. Freshness is only re-checked on a forced
+     * rescan (scan() passes force=true), so a reload picks up new upstream commits. */
+    async _ensureTree(force) {
+      if (this._paths && !force) return;
+      let version = null;
+      try { version = await this._getVersion(); } catch (_e) { /* fall back to cache */ }
+      if (this._paths && version && version.sha === this._sha) return;
+      const resp = await fetch(this._url('tree'), { headers: { Accept: 'application/json' } });
+      if (!resp.ok) throw new Error(`tree ${resp.status}`);
+      const data = await resp.json();
+      this._sha = data.sha || (version && version.sha) || null;
+      this._paths = (data.files || []).map((p) => String(p).replace(/\\/g, '/'));
+      this._treeSet = new Set(this._paths);
+    }
+
+    async _fetchFile(path) {
+      const resp = await fetch(this._url('file') + '?path=' + encodeURIComponent(path));
+      return resp.ok ? resp : null;
+    }
+
+    async _readText(path) {
+      const resp = await this._fetchFile(path);
+      return resp ? resp.text() : null;
+    }
+
+    async _readBytes(path) {
+      const resp = await this._fetchFile(path);
+      return resp ? new Uint8Array(await resp.arrayBuffer()) : null;
+    }
+
+    async scan() {
+      // Re-check the sha the service currently reports on each (re)scan and refetch
+      // /tree when it changed. (Upstream freshness itself is driven by the service's
+      // TTL + POST /refresh, not by this client.)
+      await this._ensureTree(true);
+      return scanFlatPaths({
+        paths: this._paths || [],
+        readText: (p) => this._readText(p),
+        makeRef: (p, meta, bankDir) => this._makeRef(p, meta, { path: p, bankDir }),
+      });
+    }
+
+    async loadBank(ref) {
+      const path = this._refPath(ref);
+      if (!path) throw new Error('Invalid bank reference for remote source');
+      const content = await this._readText(path);
+      if (!content) throw new Error('Failed to read bank from remote');
+      const data = parseYaml(content);
+      if (!isBank(data)) throw new Error('Invalid bank');
+      const meta = bankMeta(data);
+      const bankRef = (typeof ref === 'object' && ref?.handle)
+        ? ref
+        : this._makeRef(path, meta, { path, bankDir: this._dirOf(path) });
+      const questions = await buildQuestionsFromData(
+        data, bankRef, (r, qd, br) => this.resolveFigure(r, qd, br)
+      );
+      return { meta, rawData: data, questions, bankRef };
+    }
+
+    /** Raw YAML text of the bank file. */
+    async loadBankText(ref) {
+      const path = this._refPath(ref);
+      if (!path) return null;
+      return this._readText(path);
+    }
+
+    /** Canvas QTI package sitting next to the bank file, resolved via /tree. */
+    async getQtiPackage(ref) {
+      const path = this._refPath(ref);
+      if (!path) return null;
+      await this._ensureTree();
+      const bankDir = (typeof ref === 'object' && ref?.handle?.bankDir) || this._dirOf(path);
+      const bankId = (typeof ref === 'object' ? ref?.meta?.bank_id : '') || '';
+      const candidates = (this._paths || [])
+        .filter((p) => p.startsWith(bankDir)
+          && p.toLowerCase().endsWith('.zip')
+          && !p.slice(bankDir.length).includes('/'))
+        .sort((a, b) => qtiZipPreference(a.split('/').pop(), bankId)
+          - qtiZipPreference(b.split('/').pop(), bankId));
+      for (const p of candidates) {
+        try {
+          const bytes = await this._readBytes(p);
+          if (bytes && await verifyQtiZipBytes(bytes)) {
+            return { bytes, filename: qtiDownloadName(bankId, p.split('/').pop()) };
+          }
+        } catch (_e) { /* next */ }
+      }
+      return null;
+    }
+
+    async resolveFigure(ref, qdata, bankRef) {
+      const fig = qdata?.figure;
+      if (!fig) return null;
+      let bankDir = bankRef?.handle?.bankDir;
+      if (!bankDir) {
+        const path = this._refPath(bankRef) || this._refPath(ref);
+        if (path) bankDir = this._dirOf(path);
+      }
+      if (!bankDir) return null;
+      await this._ensureTree();
+      const basename = fig.replace(/\\/g, '/').split('/').pop();
+      const candidates = [
+        `${bankDir}${fig.replace(/\\/g, '/')}`,
+        `${bankDir}Figures/${basename}`,
+        `${bankDir}Figure/${basename}`,
+        `${bankDir}figures/${basename}`,
+        `${bankDir}figure/${basename}`,
+        `${bankDir}Images/${basename}`,
+        `${bankDir}images/${basename}`,
+      ];
+      for (const path of candidates) {
+        // look up in the fetched tree instead of probing the network
+        if (this._treeSet && !this._treeSet.has(path)) continue;
+        try {
+          const bytes = await this._readBytes(path);
+          if (bytes) return bytesToDataUrl(bytes, basename);
+        } catch (_e) { /* next */ }
+      }
+      return null;
+    }
+
+    _dirOf(path) {
+      return path.substring(0, path.lastIndexOf('/') + 1);
+    }
+
+    _refPath(ref) {
+      if (typeof ref === 'string') return ref;
+      return ref?.handle?.path || ref?.path || null;
+    }
+
+    _makeRef(path, meta, handleExtra) {
+      return {
+        id: path,
+        path,
+        meta,
+        sourceKind: 'remote',
+        handle: handleExtra,
+      };
+    }
+
+    findBankRef(repoData, path) {
+      for (const topics of Object.values(repoData || {})) {
+        for (const banks of Object.values(topics)) {
+          for (const b of banks) {
+            if (b.path === path) return b.bankRef;
+          }
+        }
+      }
+      return null;
+    }
+  }
 
   function autoSelectSource() {
+    if (global.__ESTELA_REMOTE__ && global.__ESTELA_REMOTE__.apiBase) {
+      return new RemoteSource(global.__ESTELA_REMOTE__.apiBase);
+    }
     if (global.__ESTELA_BUNDLE__) return new BundleSource();
     if (global.__TAURI__) return new TauriSource();
     return new DirectorySource();
@@ -936,6 +1143,7 @@
     DirectorySource,
     ZipSource,
     BundleSource,
+    RemoteSource,
     autoSelectSource,
   };
 })(typeof window !== 'undefined' ? window : globalThis);
